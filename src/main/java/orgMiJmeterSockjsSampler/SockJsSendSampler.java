@@ -19,7 +19,10 @@ import org.springframework.core.task.SyncTaskExecutor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.messaging.converter.StringMessageConverter;
 import org.springframework.messaging.simp.stomp.StompHeaders;
+import org.springframework.messaging.simp.stomp.StompSession;
 import org.springframework.messaging.simp.stomp.StompSessionHandler;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
+import org.springframework.util.concurrent.ListenableFuture;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.socket.WebSocketHttpHeaders;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
@@ -32,7 +35,7 @@ import org.springframework.web.socket.sockjs.client.WebSocketTransport;
 import org.springframework.web.socket.sockjs.frame.Jackson2SockJsMessageCodec;
 import org.springframework.web.socket.sockjs.transport.TransportType;
  
-public class SockJsSampler extends AbstractJavaSamplerClient implements Serializable {
+public class SockJsSendSampler extends AbstractJavaSamplerClient implements Serializable {
     private static final long serialVersionUID = 1L;
     private static final Jackson2SockJsMessageCodec CODEC = new Jackson2SockJsMessageCodec();
 	
@@ -51,7 +54,9 @@ public class SockJsSampler extends AbstractJavaSamplerClient implements Serializ
 	public static final String CONNECTION_HEADERS_HEARTBEAT = "connectionHeadersHeartbeat";
 	public static final String SUBSCRIBE_HEADERS_ID = "subscribeHeadersId";
 	public static final String SUBSCRIBE_HEADERS_DESTINATION = "subscribeHeadersDestination";
-	
+	public static final String HTTP_BASIC_AUTH_USERNAME = "httpBasicAuthUsername";
+	public static final String HTTP_BASIC_AUTH_PASSWORD = "httpBasicAuthPassword";
+
 	
 	@Override
     public void setupTest(JavaSamplerContext context){
@@ -64,7 +69,7 @@ public class SockJsSampler extends AbstractJavaSamplerClient implements Serializ
     // @TODO: remove Passwords and so on 
     public Arguments getDefaultParameters() {
         Arguments defaultParameters = new Arguments();
-        defaultParameters.addArgument(TRANSPORT, XHR_STREAMING_TRANSPORT, "", "Choose a transport-type: 'websocket' or 'xhr-streaming'");
+        defaultParameters.addArgument(TRANSPORT, WEBSOCKET_TRANSPORT, "", "Choose a transport-type: 'websocket' or 'xhr-streaming'");
         defaultParameters.addArgument(HOST, "https://[xxx].[xxx]");
         defaultParameters.addArgument(PATH, "/[xxx]/");
         defaultParameters.addArgument(CONNECTION_TIME, "[30000]");
@@ -76,7 +81,9 @@ public class SockJsSampler extends AbstractJavaSamplerClient implements Serializ
         defaultParameters.addArgument(CONNECTION_HEADERS_HEARTBEAT, "heart-beat:0,0");
         defaultParameters.addArgument(SUBSCRIBE_HEADERS_ID, "id:sub-[x]");
         defaultParameters.addArgument(SUBSCRIBE_HEADERS_DESTINATION, "destination:/exchange/[exchange_name]/[queue_name]");
-        
+		defaultParameters.addArgument(HTTP_BASIC_AUTH_USERNAME, "box");
+		defaultParameters.addArgument(HTTP_BASIC_AUTH_PASSWORD, "mac");
+
         return defaultParameters;
     }
  
@@ -143,9 +150,14 @@ public class SockJsSampler extends AbstractJavaSamplerClient implements Serializ
      	transports.add(new WebSocketTransport(simpleWebSocketClient));
  				
  		SockJsClient sockJsClient = new SockJsClient(transports);
+
  		WebSocketStompClient stompClient = new WebSocketStompClient(sockJsClient);
  		stompClient.setMessageConverter(new StringMessageConverter());
- 		
+
+		ThreadPoolTaskScheduler taskScheduler = new ThreadPoolTaskScheduler();
+		taskScheduler.afterPropertiesSet();
+		stompClient.setTaskScheduler(taskScheduler);
+
  		URI stompUrlEndpoint = new URI(context.getParameter(HOST) + context.getParameter(PATH));
  		StompSessionHandler sessionHandler = new SockJsWebsocketStompSessionHandler(
 			this.getSubscribeHeaders(context), 
@@ -155,18 +167,19 @@ public class SockJsSampler extends AbstractJavaSamplerClient implements Serializ
 		);
  		 		
  		WebSocketHttpHeaders handshakeHeaders = new WebSocketHttpHeaders();
+ 		handshakeHeaders.setBasicAuth(HTTP_BASIC_AUTH_USERNAME, HTTP_BASIC_AUTH_PASSWORD);
  		StompHeaders connectHeaders = new StompHeaders();
  		String connectionHeadersString = this.getConnectionsHeaders(context);
  		String[] splitHeaders = connectionHeadersString.split("\n");
 
- 		for (int i = 0; i < splitHeaders.length; i++) {
+/* 		for (int i = 0; i < splitHeaders.length; i++) {
  			int key = 0;
  			int value = 1;
  			String[] headerParameter = splitHeaders[i].split(":");
  			
  			connectHeaders.add(headerParameter[key], headerParameter[value]);			
- 		}
- 		
+ 		}*/
+		System.out.println("here456");
  		String startMessage = "\n[Execution Flow]"
  						    + "\n - Opening new connection"
  							+ "\n - Using response message pattern \"a[\"CONNECTED\""
@@ -174,9 +187,27 @@ public class SockJsSampler extends AbstractJavaSamplerClient implements Serializ
  							+ "\n - Using disconnect pattern \"\"";
 
  		responseMessage.addMessage(startMessage);
- 		
- 		stompClient.connect(stompUrlEndpoint.toString(), handshakeHeaders, connectHeaders, sessionHandler, new Object[0]);
- 		 	
+
+ 		//stompClient.connect(stompUrlEndpoint.toString(), handshakeHeaders, connectHeaders, sessionHandler, new Object[0]);
+		StompSession stompSession;
+		try {
+			ListenableFuture<StompSession> future =
+					stompClient.connect(stompUrlEndpoint.toString(), handshakeHeaders, connectHeaders, sessionHandler, new Object[0]);
+			stompClient.setDefaultHeartbeat(new long[]{10000,10000});
+			stompSession = future.get();
+			stompSession.setAutoReceipt(true);
+			System.out.println("here123");
+        /*        stompSession.subscribe(
+        "/topic/wechat/message/receiveText/12345", receiveTextStompSessionHandler);*/
+			// stompSession.send("/app/chat", "123456");
+			// StompSession.Subscription subscription =
+			//stompSession.subscribe("/queue/sync", new ReceiveTextStompSessionHandler());
+			//RoomCommonMessage messageStomp = new RoomCommonMessage("12", "34");
+			stompSession.send("/queue/cxs", "12345");
+			// stompSession.send("/app/chat", "123456");
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
  		// wait some time till killing the stomp connection
  		Thread.sleep(context.getLongParameter(CONNECTION_TIME) + context.getLongParameter(RESPONSE_BUFFER_TIME));
  		stompClient.stop();
@@ -253,7 +284,7 @@ public class SockJsSampler extends AbstractJavaSamplerClient implements Serializ
 			context.getParameter(CONNECTION_HEADERS_PASSCODE),
 			context.getParameter(CONNECTION_HEADERS_HOST), 
 			context.getParameter(CONNECTION_HEADERS_ACCEPT_VERSION),
-			context.getParameter(CONNECTION_HEADERS_HEARTBEAT)			
+			context.getParameter(CONNECTION_HEADERS_HEARTBEAT)
 		);
     }
     
